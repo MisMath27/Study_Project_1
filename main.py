@@ -1,14 +1,4 @@
-import os
-from http.client import HTTPException
-from fastapi import FastAPI, Query, File, UploadFile, HTTPException
-from config import load_config
-from logger import logger
-import re
-from typing import Optional
-from pydantic import BaseModel, EmailStr, Field, validator
-from datetime import datetime
-from typing import Annotated
-from typing import List
+from imports import *
 
 
 # Загружаем конфигурацию
@@ -48,7 +38,7 @@ class Feedback(BaseModel):
 @app.get("/")
 def read_root():
     logger.info("Корневой маршрут вызван")
-    return {"message": "Hello, World!"}
+    return {"message": "Здарова, заебал!"}
 
 
 
@@ -188,11 +178,78 @@ async def search_psoducts(
     return res
 
 
+class Log(BaseModel):
+    name: str
+    password: str
+
+SECRET_KEY = 'youe secret key'
+signer = Signer(SECRET_KEY)
+
+
+@app.post('/login')
+async def login(
+    response: Response,
+    Log: Log
+):
+    # Если пришёл JSON через Log
+    if Log:
+        username = Log.name
+        pwd = Log.password
+
+    if not username or not pwd:
+        raise HTTPException(status_code=400, detail="Username and password required")
+
+    if username == "admin" and pwd == "secret":
+        user_id = str(uuid.uuid4())
+        signed_token = signer.sign(user_id).decode('utf-8')
+
+        response.set_cookie(
+            key="session_token",
+            value=signed_token,
+            httponly=True,
+            secure=False,
+            samesite="lax",
+            max_age=3600
+        )
+        return {
+            "message": "Login successful",
+            "session_token": signed_token,
+            "user_id": user_id
+        }
+
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+@app.get('/profile')
+async def get_profile(session_token: Optional[str] = Cookie(None)):
+    if not session_token:
+        raise HTTPException(status_code=401, detail="Unauthorized: No session token")
+
+    try:
+        user_id = signer.unsign(session_token).decode('utf-8')
+    except Exception:
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid signature")
+
+    profile_data = {
+        "user_id": user_id,
+        "username": "admin",
+        "email": "admin@example.com",
+        "role": "user"
+    }
+
+    return {
+        "message": "Profile accessed successfully",
+        "profile": profile_data
+    }
+
+
+@app.post('/logout')
+async def logout(response: Response):
+    response.delete_cookie("session_token")
+    return{"message": "Logout successful"}
 
 
 
 
-# Запуск (если файл выполняется напрямую)
 if __name__ == "__main__":
     import uvicorn
 

@@ -155,7 +155,7 @@ async def get_product(product_id: int):
 
 
 @app.get('/products/search')
-async def search_psoducts(
+async def search_products(
         keyword: str,
         category: Optional[str] = None,
         limit: int = Query(10, ge=1, le=100)
@@ -182,58 +182,221 @@ class Log(BaseModel):
     name: str
     password: str
 
-SECRET_KEY = 'youe secret key'
-signer = Signer(SECRET_KEY)
+# SECRET_KEY = config.secret_key
+# session_manager = SessionManager(SECRET_KEY)
+#
+# @app.post('/login')
+# async def login(
+#     response: Response,
+#     Log: Log
+# ):
+#     # Если пришёл JSON через Log
+#     if Log:
+#         username = Log.name
+#         pwd = Log.password
+#
+#     if not username or not pwd:
+#         raise HTTPException(status_code=400, detail="Username and password required")
+#
+#     if username == "admin" and pwd == "secret":
+#         user_id = str(uuid.uuid4())
+#         signed_token = signer.sign(user_id).decode('utf-8')
+#
+#         response.set_cookie(
+#             key="session_token",
+#             value=signed_token,
+#             httponly=True,
+#             secure=False,
+#             samesite="lax",
+#             max_age=3600
+#         )
+#         return {
+#             "message": "Login successful",
+#             "session_token": signed_token,
+#             "user_id": user_id
+#         }
+#
+#     raise HTTPException(status_code=401, detail="Unauthorized")
+
+# @app.get('/profile')
+# async def get_profile(session_token: Optional[str] = Cookie(None)):
+#     if not session_token:
+#         raise HTTPException(status_code=401, detail="Unauthorized: No session token")
+#
+#     try:
+#         user_id = signer.unsign(session_token).decode('utf-8')
+#     except Exception:
+#         raise HTTPException(status_code=401, detail="Unauthorized: Invalid signature")
+#
+#     profile_data = {
+#         "user_id": user_id,
+#         "username": "admin",
+#         "email": "admin@example.com",
+#         "role": "user"
+#     }
+#
+#     return {
+#         "message": "Profile accessed successfully",
+#         "profile": profile_data
+#     }
+
+
+# @app.post('/logout')
+# async def logout(response: Response):
+#     response.delete_cookie("session_token")
+#     return{"message": "Logout successful"}
+
+
+class SessionManager:
+    def __init__(self, secret_key: str):
+        self.secret_key = secret_key.encode('utf-8')
+        self.session_lifetime = 300
+        self.refresh_threshold = 180
+
+    def _create_signature(self, user_id: str, timestamp: int) -> str:
+        message = f"{user_id}.{timestamp}".encode('utf-8')
+        signature = hmac.new(
+            self.secret_key,
+            message,
+            hashlib.sha256
+        ).hexdigest()
+        return signature
+
+    def _verify_signature(self, user_id: str, timestamp: int, signature: str) -> bool:
+        expected_signature = self._create_signature(user_id, timestamp)
+        return hmac.compare_digest(expected_signature, signature)
+
+    def create_session_token(self, user_id: str) -> str:
+        timestamp = int(time.time())
+        signature = self._create_signature(user_id, timestamp)
+        return f"{user_id}.{timestamp}.{signature}"
+
+    def validate_and_refresh_token(self, token: str, current_time: Optional[int] = None) -> tuple[bool, Optional[str], Optional[str], Optional[int]]:
+        if current_time is None:
+            current_time = int(time.time())
+
+        try:
+            parts = token.split('.')
+            if len(parts) != 3:
+                return False, False, None, None
+
+            user_id = parts[0]
+            timestamp_str = parts[1]
+            provided_signature = parts[2]
+
+            try:
+                timestamp = int(timestamp_str)
+            except ValueError:
+                return False, False, None, None
+
+        except Exception:
+            return False, False, None, None
+
+        if not self._verify_signature(user_id, timestamp, provided_signature):
+            return False, False, None, None
+
+        time_since_activity = current_time - timestamp
+
+        if time_since_activity > self.session_lifetime:
+            return False, False, None, None
+
+        should_refresh = time_since_activity >= self.refresh_threshold
+
+        new_timestamp = current_time if should_refresh else None
+        return True, should_refresh, user_id, new_timestamp
+
+    def create_refreshed_token(self, user_id: str, timestamp: int) -> str:
+        signature = self._create_signature(user_id, timestamp)
+        return f"{user_id}.{timestamp}.{signature}"
+
+
+SECRET_KEY = config.secret_key
+session_manager = SessionManager(SECRET_KEY)
+
+class LoginData(BaseModel):
+    name: str
+    password: str
 
 
 @app.post('/login')
 async def login(
     response: Response,
-    Log: Log
+    login_data: LoginData
 ):
-    # Если пришёл JSON через Log
-    if Log:
-        username = Log.name
-        pwd = Log.password
+    username = login_data.name
+    pwd = login_data.password
 
     if not username or not pwd:
         raise HTTPException(status_code=400, detail="Username and password required")
 
     if username == "admin" and pwd == "secret":
         user_id = str(uuid.uuid4())
-        signed_token = signer.sign(user_id).decode('utf-8')
+
+        session_token = session_manager.create_session_token(user_id)
 
         response.set_cookie(
             key="session_token",
-            value=signed_token,
+            value=session_token,
             httponly=True,
             secure=False,
             samesite="lax",
-            max_age=3600
+            max_age=300
         )
         return {
             "message": "Login successful",
-            "session_token": signed_token,
-            "user_id": user_id
+            "session_token": session_token,
+            "user_id": user_id,
+            "expires_in": 300
         }
 
     raise HTTPException(status_code=401, detail="Unauthorized")
 
-@app.get('/profile')
-async def get_profile(session_token: Optional[str] = Cookie(None)):
-    if not session_token:
-        raise HTTPException(status_code=401, detail="Unauthorized: No session token")
 
-    try:
-        user_id = signer.unsign(session_token).decode('utf-8')
-    except Exception:
-        raise HTTPException(status_code=401, detail="Unauthorized: Invalid signature")
+@app.get('/profile')
+async def get_profile(response: Response, request: Request, session_token: Optional[str] = Cookie(None)):
+
+    if not session_token:
+        raise HTTPException(status_code=status.HTTP_401_UNATHORIZED, detail="Unauthorized: No session token")
+
+    current_time = int(time.time())
+    is_valid, should_refresh, user_id, new_timestamp = session_manager.validate_and_refresh_token(session_token, current_time)
+
+    if not is_valid:
+
+        try:
+            parts = session_token.split('.')
+            if len(parts) == 3:
+                timestamp  = int(parts[1])
+                if current_time - timestamp > session_manager.session_lifetime:
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+        except:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid session"
+        )
+
+    if should_refresh and new_timestamp is not None:
+        new_token = session_manager.create_refreshed_token(user_id, new_timestamp)
+
+        response.set_cookie(
+            key="session_token",
+            value=new_token,
+            httponly=True,
+            secure=False,
+            samesite="lax",
+            max_age=300
+        )
+
+        logger.info(f"Session refreshed for user {user_id} at timestamp {new_timestamp}")
 
     profile_data = {
         "user_id": user_id,
         "username": "admin",
         "email": "admin@example.com",
-        "role": "user"
+        "role": "user",
+        "session_updated": should_refresh,
+        "current_time": current_time
     }
 
     return {
@@ -246,6 +409,8 @@ async def get_profile(session_token: Optional[str] = Cookie(None)):
 async def logout(response: Response):
     response.delete_cookie("session_token")
     return{"message": "Logout successful"}
+
+
 
 
 

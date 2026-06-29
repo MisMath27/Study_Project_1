@@ -3,8 +3,75 @@ from imports import *
 
 # Загружаем конфигурацию
 config = load_config()
+logger = logging.getLogger(__name__)
 
-app = FastAPI()
+MODE = settings.MODE.upper()
+if MODE not in ['DEV', 'PROD']:
+    logger.warning(f'Unknown mode: {MODE}. Using dev mode')
+    MODE = 'DEV'
+
+if MODE == 'PROD':
+    app = FastAPI(
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        title="API (PROD)"
+    )
+    logger.info("Application started in PROD mode - documentation disabled")
+
+else:
+    app = FastAPI(
+        docs_url=None,
+        redoc_url = None,
+        openapi_url = None,
+        title="API (DEV)"
+    )
+    logger.info("Application started in DEV mode - documentation will be protected")
+
+def authenticate_docs(credentials: HTTPBasicCredentials = Depends(HTTPBasic())):
+    if MODE != "DEV":
+        raise HTTPException(status_code=404, detail='Not Found')
+
+    correct_username = secrets.compare_digest(
+        credentials.username,
+        settings.DOCS_USER or 'admin'
+    )
+    correct_password = secrets.compare_digest(
+        credentials.password,
+        settings.DOCS_PASSWORD or 'secret'
+    )
+
+    if not (correct_username and correct_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail='Incorrect username or password',
+            headers={'WWW-Authenticate': "Basic"},
+        )
+    return credentials
+
+if MODE == "DEV":
+    from fastapi.openapi.docs import get_swagger_ui_html
+    from fastapi.openapi.utils import get_openapi
+
+    @app.get('/docs', include_in_schema=False)
+    async def custom_swagger_ui_html(auth: HTTPBasicCredentials = Depends(authenticate_docs)):
+        return get_swagger_ui_html(
+            openapi_url='/openapi.json',
+            title='API Documentation',
+            swagger_js_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
+            swagger_css_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
+        )
+
+    @app.get('/openapi.json', include_in_schema=False)
+    async def custom_openapi_json(
+            auth: HTTPBasicCredentials = Depends(authenticate_docs)
+    ):
+        return app.openapi()
+
+    logger.info("Docs available at /docs with basic auth")
+
+
+
 
 
 class Contact(BaseModel):
@@ -744,10 +811,23 @@ async def register(user: AuthUserRegister):
     return {"message": f"User {user.username} registered successfully"}
 
 
-
 @app.get("/login")
 async def login(user: AuthUserInDB = Depends(auth_user)):
     return {"message": f"Welcome, {user.username}!"}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -1,7 +1,9 @@
 from imports import *
+from security import *
+from db import get_user, USERS_DATA, authenticate_user
+from models import *
 
 
-# Загружаем конфигурацию
 config = load_config()
 logger = logging.getLogger(__name__)
 
@@ -811,13 +813,69 @@ async def register(user: AuthUserRegister):
     return {"message": f"User {user.username} registered successfully"}
 
 
-@app.get("/login")
+@app.get("/login_3")
 async def login(user: AuthUserInDB = Depends(auth_user)):
     return {"message": f"Welcome, {user.username}!"}
 
 
+@app.post("/login_4", response_model=TokenResponse)
+async def login(login_data: LoginRequest):
+    """
+    Этот маршрут проверяет учетные данные пользователя и возвращает JWT токен, если данные правильные.
+    """
+    # Добавляем логирование для отладки
+    print(f"Получен запрос на /login_4")
+    print(f"Username: {login_data.username}")
+    print(f"Password: {login_data.password}")
+
+    # Проверяем пользователя
+    user_exists = authenticate_user(login_data.username, login_data.password)
+    print(f"Аутентификация: {user_exists}")
+
+    if not user_exists:
+        print("Ошибка: Неверные учетные данные")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    print("Создание JWT токена...")
+    token_data = {"sub": login_data.username}
+    access_token = create_jwt_token(token_data)
+    print(f"Токен создан: {access_token[:50]}...")
+
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.get("/protected_resource")
+async def protected_resource(current_user: str = Depends(get_current_user)):
+    """
+        Защищенная конечная точка, доступная только с валидным JWT токеном.
+        """
+    return {
+        "message": "Access grant to protected resource",
+        "user": current_user,
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
 
+@app.get("/about_me")
+async def about_me(current_user: str = Depends(get_current_user)):
+    """
+    Этот маршрут защищен и требует токен. Если токен действителен, мы возвращаем информацию о пользователе.
+    """
+    user = None
+    for u in USER_DATA:
+        if u.get("username") == current_user:
+            user = u
+            break
+
+    if user:
+        return {
+            "username": user["username"],
+            "message": f'Welcome, {current_user}!'
+        }
+    return {"error": "User not found"}
 
 
 

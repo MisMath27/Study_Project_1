@@ -1,6 +1,6 @@
 from imports import *
-from dataclasses import dataclass
 from dotenv import load_dotenv
+from dataclasses import dataclass
 from pydantic_settings import BaseSettings
 
 
@@ -49,3 +49,20 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+class User(BaseModel):
+    username: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
+
+
+
